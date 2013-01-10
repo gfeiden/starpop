@@ -14,6 +14,9 @@
 
 import numpy as np
 import pdb
+import logging
+
+log = logging.getLogger('imf')
 
 defaultMFamp = 0.44
 defaultMFindex = 0.51
@@ -141,9 +144,142 @@ def sample_imf(massLimits, imfSlopes, totalMass,
 
     return (masses, isMultiple, compMasses, systemMasses)
 
+class IMF(object):
+    def __init__(self, massLimits=massLimits, multiplicity=None):
+        """
+        The IMF base class. The multiplicity implementation is here.
+        """
+        self.multi_props = multiplicity
+        self.mass_limits = massLimits
 
-class IMF_broken_powerlaw(object):
-    def __init__(self, massLimits, powers):
+    def generateCluster(self, totalMass):
+        """
+        Generate a cluster of stellar systems with the specified IMF.
+        
+        Randomly sample from an IMF with specified mass
+        limits until the desired total mass is reached. The maximum
+        stellar mass is not allowed to exceed the total cluster mass.
+        The simulated total mass will not be exactly equivalent to the
+        desired total mass; but we will take one star above or below
+        (whichever brings us closer to the desired total) the desired
+        total cluster mass break point.
+
+        Primary stars are sampled from the IMF, companions are generated
+        based on the multiplicity properties provided.
+
+        @param totalMass The total mass of the cluster (including companions).
+        """
+
+        if (massLimits[-1] > totalMass):
+            log.info('sample_imf: Setting maximum allowed mass to %d' %
+                      (totalMass))
+
+        massLimits[-1] = totalMass
+
+        # Estimate the mean number of stars expected.
+        self.normalize(totalMass)
+        mean_number = self.getProbabilityBetween(massLimits[0], massLimits[-1])
+        newStarCount = round(meanNumber)
+        if multiplicity == None:
+            newStarCount *= 1.1
+
+        # Generate output arrays.
+        masses = np.array([], dtype=float)
+        isMultiple = np.array([], dtype=bool)
+        compMasses = []
+        systemMasses = np.array([], dtype=float)
+
+        # Loop through and add stars to the cluster until we get to
+        # the desired total cluster mass.
+        totalMassTally = 0
+        loopCnt = 0
+
+        while totalMassTally < totalMass:
+            # Generate a random number array.
+            uniX = np.random.rand(newStarCount)
+
+            # Convert into the IMF from the inverted CDF
+            newMasses = imf.imf_dice_star_cl(uniX)
+
+            if multiplicity:
+                compMasses = [[] for newMass in newMasses]
+
+                # Determine the multiplicity of every star
+                MF = multiplicity.getMultiplicityFraction()
+                CSF = multiplicity.getCompanionStarFraction()
+                
+                newIsMultiple = np.random.rand(newStarCount) < MF
+
+                # Copy over the primary masses. Eventually add the companions.
+                newSystemMasses = newMasses.copy()
+        
+                # Calculate number and masses of companions
+                for ii in range(len(newMasses)):
+                    if newIsMultiple[ii]:
+                        # determine number of companions
+                        n_comp = 1 + np.random.poisson((CSF[ii]/MF[ii]) - 1)
+
+                        # Determine the mass ratios of the companions
+                        q_values = multiplicity.getMassRatios(np.random.rand(n_comp))
+
+                        # Determine the masses of the companions
+                        m_comp = q_values * newMasses[ii]
+
+                        # Add in seperation information
+
+                        # Only keep companions that are more than the minimum mass
+                        compMasses[ii] = m_comp[m_comp >= massLimits[0]]
+                        newSystemMasses[ii] += compMasses[ii].sum()
+
+                        # Double check for the case when we drop all companions.
+                        # This happens a lot near the minimum allowed mass.
+                        if len(compMasses) == 0:
+                            newIsMultiple[ii] == False
+
+                newTotalMassTally = newSystemMasses.sum()
+                isMultiple = np.append(isMultiple, newIsMultiple)
+                systemMasses = np.append(systemMasses, newSystemMasses)
+            else:
+                newTotalMassTally = newMasses.sum()
+
+            # Append to our primary masses array
+            masses = np.append(masses, newMasses)
+            
+            if (loopCnt >= 0):
+                log.info('sample_imf: Loop %d added %.2e Msun to previous total of %.2e Msun' %
+                         (loopCnt, newTotalMassTally, totalMassTally))
+
+            totalMassTally += newTotalMassTally
+            newStarCount = meanNumber * 0.1  # increase by 20% each pass
+            loopCnt += 1
+        
+        # Make a running sum of the system masses
+        if multiplicity:
+            massCumSum = systemMasses.cumsum()
+        else:
+            massCumSum = masses.cumsum()
+
+        # Find the index where we are closest to the desired
+        # total mass.
+        idx = np.abs(massCumSum - totalMass).argmin()
+
+        masses = masses[:idx+1]
+
+        if multiplicity:
+            systemMasses = systemMasses[:idx+1]
+            isMultiple = isMultiple[:idx+1]
+            compMasses = compMasses[:idx+1]
+        else:
+            isMultiple = np.zeros(len(masses), dtype=bool)
+            systemMasses = masses
+
+        return (masses, isMultiple, compMasses, systemMasses)
+        
+
+        
+    
+class IMF_broken_powerlaw(IMF):
+    def __init__(self, massLimits, powers, multiplicity=None):
         """
         Initialze a multi-part powerlaw with N parts.
 
@@ -179,7 +315,7 @@ class IMF_broken_powerlaw(object):
 
     def imf_xi(self, m):
         """
-        Probability density distribution describing the IMF.
+        Probability density describing the IMF.
 
         Input:
         m - mass of a star
@@ -226,11 +362,11 @@ class IMF_broken_powerlaw(object):
             return mxi
 
 
-    def imf_int_xi(self, left, right):
+    def getProbabilityBetween(self, massLo, massHi):
         """
         Return the integrated probability between some low and high mass value.
         """
-        return self.prim_xi(right) - self.prim_xi(left)
+        return self.prim_xi(massHi) - self.prim_xi(massLo)
 
     def imf_int_mxi(self, left, right):
         """
@@ -288,7 +424,7 @@ class IMF_broken_powerlaw(object):
         else:
             return val
 
-    def imf_norm_cl(self, Mcl, Mmin=None, Mmax=None):
+    def normalize(self, Mcl, Mmin=None, Mmax=None):
         """
         Normalize the IMF to a total cluster mass within a specified
         minimum and maximum stellar mass range.
@@ -421,12 +557,14 @@ class IMF_broken_powerlaw(object):
         else:
             return y * z
 
-class Salpeter_1955(IMF_broken_powerlaw):
-    def __init__(self):
+class IMFSalpeter1955(IMF_broken_powerlaw):
+    def __init__(self, multiplicity=multiplicity):
+
         massLimits = np.array([0.40, 10.0])
         powers = np.array([-2.3])
 
-        IMF_broken_powerlaw.__init__(self, massLimits, powers)
+        IMF_broken_powerlaw.__init__(self, massLimits, powers,
+                                     multiplicity=multiplicity)
 
 
 class Miller_Scalo_1979(IMF_broken_powerlaw):
