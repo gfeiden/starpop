@@ -25,6 +25,39 @@ class RedLawCardelli(object):
 		@param wavelength The wavelength in Ångstroms.
 		'''
 		
+		 #Convert wavelength in Angtroms to inverse microns
+		inv_wave_mu = (1/(wavelength*1e-4))
+
+                #Define x and y according to Cardelli Eqns 3a and 3b of Cardelli 1989
+		x = inv_wave_mu
+		y = x - 1.82
+
+		if ( (min.x < 0.3) || (max.x > 3.3)):
+			raise Exception("{0}: Wavelength value outside of defined wavelength range of Cardelli 1989 Law.".format(self.__class__.__name__))
+
+		a = np.zeros(wavelength.shape)
+		b = np.zeros(wavelength.shae)
+
+                #Define a(x) and b(x) according to Cardelli
+                #Blue range x in [3.3,1.1]
+		blue_ind = (x <= 3.3)
+		bluer_ind = (x[blue_ind] >= 1.1)
+		i = blue_ind[bluer_ind]
+		a[i] =  1 + 0.17699*y[i] - 0.50447*(np.power(y[i],2)) - 0.02427*(np.power(y[i],3)) +0.72085*(np.power(y[i],4)) + 0.01979*(np.power(y[i],5)) - 0.77530*(np.power(y[i],6)) + 0.32999*(np.power(y[i],7))
+
+		b[i] = 1.41338*y[i] + 2.28305*(np.power(y[i],2)) +1.07233*(np.power(y[i],3)) - 5.38434*(np.power(y[i],4)) - 0.62251*(np.power(y[i],5)) + 5.30260*(np.power(y[i],6)) - 2.09002*(np.power(y[i],7));
+    
+                #Red range x in [0.3,1.1)
+		red_ind = (x >= 0.3)
+		redder_ind = (x[red_ind] < 1.1)
+		j = red_ind[redder_ind]
+		a[j] = 0.574*pow(j,1.61);
+		b[j] = -0.527*pow(j,1.61);
+
+		#Find extinction function of wavelength
+		ext_wave = (a +b/Rv)*av
+		return ext_wave
+		
 	def extinctify(self, wavelengths=None, values=None):
 		'''
 		Given wavelength grid and (flux or luminosity) values, returns the extincted values.
