@@ -8,7 +8,7 @@ def makeIntegratedSpectrum():
     
     # Pick the IMF and multiplicity properties
     multiProps = MultplicityDefault()
-    imf = IMFSalpeter(multiplicity=multiProps)
+    imf = IMFSalpeter1955(multiplicity=multiProps)
 
     # Pick the Stellar Evolution Model (isochrone)
     evoModel = StellarEvolutionGeneva()
